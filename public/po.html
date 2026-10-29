@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>제주 입체지도 · three.js</title>
+<style>
+  :root{--ink:#0b2a3a;--card:rgba(255,255,255,.92);--org:#ff8a1f;--sea:#1a78b0}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:#bfe3f5;font-family:"Malgun Gothic","Apple SD Gothic Neo",sans-serif;color:var(--ink)}
+  canvas{display:block}
+  #labels{position:fixed;inset:0;pointer-events:none;overflow:hidden}
+  .lb{position:absolute;left:0;top:0;white-space:nowrap;font-size:12px;font-weight:700;padding:1px 6px;border-radius:9px;background:rgba(255,255,255,.82);color:var(--ink);box-shadow:0 1px 4px rgba(0,0,0,.25);transform:translate(-50%,-100%);will-change:transform}
+  .lb.spot{background:rgba(255,138,31,.95);color:#fff}
+  .panel{position:fixed;background:var(--card);border-radius:14px;box-shadow:0 6px 24px rgba(0,0,0,.25);backdrop-filter:blur(6px)}
+  #title{left:16px;top:16px;padding:10px 16px}
+  #title b{font-size:20px;letter-spacing:.5px}
+  #title small{display:block;opacity:.65;margin-top:2px}
+  #side{right:16px;top:16px;width:290px;max-height:calc(100% - 32px);overflow:auto;padding:14px}
+  #side h3{margin:0 0 8px;font-size:14px}
+  #side label.ly{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:13px;cursor:pointer}
+  .sw{width:12px;height:12px;border-radius:3px;display:inline-block}
+  #month{width:100%}
+  #mlabel{font-weight:700;margin:4px 0 6px}
+  .rk{display:block;width:100%;text-align:left;border:0;background:none;padding:4px 0;cursor:pointer;font:inherit;font-size:12px;color:inherit}
+  .rk .bar{height:7px;border-radius:4px;background:linear-gradient(90deg,#ffb44d,#ff6a00);margin-top:2px}
+  .rk:hover{background:rgba(255,138,31,.12)}
+  hr{border:0;border-top:1px solid rgba(0,0,0,.1);margin:10px 0}
+  #info{left:16px;bottom:16px;width:310px;padding:14px;display:none}
+  #info h4{margin:0 0 2px;font-size:16px}
+  #info .tp{font-size:11px;color:#fff;background:var(--sea);display:inline-block;padding:1px 8px;border-radius:9px;margin-bottom:6px}
+  #info p{margin:6px 0;font-size:13px;line-height:1.5}
+  #info .x{position:absolute;right:10px;top:8px;border:0;background:none;font-size:18px;cursor:pointer}
+  #mini{display:flex;align-items:flex-end;gap:3px;height:60px;margin-top:6px}
+  #mini i{flex:1;background:#ffc58a;border-radius:2px 2px 0 0;position:relative}
+  #mini i.on{background:var(--org)}
+  #hint{left:50%;transform:translateX(-50%);bottom:14px;padding:6px 14px;font-size:12px;opacity:.9;white-space:nowrap}
+  #msg{position:fixed;inset:0;display:none;align-items:center;justify-content:center;text-align:center;padding:24px;background:#bfe3f5;font-size:15px;line-height:1.7}
+  @media(max-width:760px){#side{width:220px;font-size:12px}#info{width:calc(100% - 32px);bottom:56px}#hint{display:none}}
+</style>
+</head>
+<body>
+<div id="labels"></div>
+<div id="title" class="panel"><b>제주 입체지도</b><small>한라산 · 오름 · 해안 · 풍력발전기 · 등대 · 돌하르방</small><a href="./" style="display:inline-block;margin-top:6px;font-size:12px;font-weight:700;color:#d96a00;text-decoration:none">← 제주담으로 돌아가기</a></div>
+<div id="side" class="panel">
+  <h3>레이어</h3>
+  <div id="layers"></div>
+  <hr>
+  <h3>서귀포 주요 관광지 방문객</h3>
+  <div id="mlabel"></div>
+  <input id="month" type="range" min="0" max="0" value="0">
+  <div id="rank"></div>
+  <hr>
+  <label class="ly"><input type="checkbox" id="auto"> 자동 회전</label>
+</div>
+<div id="info" class="panel"><button class="x" id="ix">×</button><div id="ib"></div></div>
+<div id="hint" class="panel">드래그: 회전 · 휠: 확대/축소 · 우클릭 드래그: 이동 · 마커 클릭: 상세 보기</div>
+<div id="msg"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="jeju_dem.js"></script>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+if (typeof THREE === "undefined" || !THREE.OrbitControls || !window.JEJU_DEM) {
+  const m = $("msg"); m.style.display = "flex";
+  m.innerHTML = "three.js 또는 jeju_dem.js 를 불러오지 못했습니다.<br>인터넷 연결과 같은 폴더의 jeju_dem.js 를 확인해 주세요.";
+  throw new Error("load fail");
+}
+
+// ================================================================ 데이터
+// 방문객 데이터: 공공데이터포털(odcloud 15125100) 응답 형식 그대로. 키는 코드에 넣지 않습니다.
+// 실데이터를 쓰려면 서버리스 함수(예: /api/visitors)가 위 API 응답(JSON)을 그대로 돌려주도록 만들고 PO_API 에 그 주소를 넣으세요.
+const PO_API = "";
+let ROWS = [
+  {"감귤박물관":5689,"기준연도":2025,"기준월":1,"산방산_용머리":43895,"정방폭포":31443,"중문대포 주상절리대":58482,"천제연폭포":21070,"천지연폭포":51536},
+  {"감귤박물관":4884,"기준연도":2025,"기준월":2,"산방산_용머리":43401,"정방폭포":25287,"중문대포 주상절리대":48030,"천제연폭포":16096,"천지연폭포":41801},
+  {"감귤박물관":3633,"기준연도":2025,"기준월":3,"산방산_용머리":59038,"정방폭포":32776,"중문대포 주상절리대":58436,"천제연폭포":24075,"천지연폭포":57813},
+  {"감귤박물관":3720,"기준연도":2025,"기준월":4,"산방산_용머리":64177,"정방폭포":50334,"중문대포 주상절리대":87497,"천제연폭포":33624,"천지연폭포":87683},
+  {"감귤박물관":4707,"기준연도":2025,"기준월":5,"산방산_용머리":65615,"정방폭포":51491,"중문대포 주상절리대":95770,"천제연폭포":33549,"천지연폭포":96907},
+  {"감귤박물관":4342,"기준연도":2025,"기준월":6,"산방산_용머리":53972,"정방폭포":48497,"중문대포 주상절리대":81547,"천제연폭포":31331,"천지연폭포":76961},
+  {"감귤박물관":5063,"기준연도":2025,"기준월":7,"산방산_용머리":17719,"정방폭포":47562,"중문대포 주상절리대":83490,"천제연폭포":27890,"천지연폭포":70883},
+  {"감귤박물관":6191,"기준연도":2025,"기준월":8,"산방산_용머리":27858,"정방폭포":55430,"중문대포 주상절리대":95690,"천제연폭포":29563,"천지연폭포":78406},
+  {"감귤박물관":4754,"기준연도":2025,"기준월":9,"산방산_용머리":30124,"정방폭포":48846,"중문대포 주상절리대":87402,"천제연폭포":29735,"천지연폭포":74789},
+  {"감귤박물관":6624,"기준연도":2025,"기준월":10,"산방산_용머리":40580,"정방폭포":70019,"중문대포 주상절리대":119116,"천제연폭포":47143,"천지연폭포":104640},
+];
+
+// 위치는 대략적인 값입니다 (경도, 위도).
+const SPOTS = {
+  "천지연폭포":       { lon: 126.5547, lat: 33.2470, desc: "서귀포 시내 가까이에서 떨어지는 22m 높이의 폭포. 야간 조명 산책로로도 유명합니다." },
+  "정방폭포":         { lon: 126.5710, lat: 33.2443, desc: "바다로 곧장 떨어지는 동양 유일의 해안 폭포." },
+  "천제연폭포":       { lon: 126.4134, lat: 33.2538, desc: "중문 단지 인근의 3단 폭포와 선임교(칠선녀교)." },
+  "중문대포 주상절리대": { lon: 126.4252, lat: 33.2376, desc: "용암이 식으며 만든 육각 기둥 절벽. 파도가 부딪히는 해안 명소." },
+  "산방산_용머리":    { lon: 126.3135, lat: 33.2306, desc: "산방산 아래 용머리해안의 퇴적암 절벽. 해안 산책로가 이어집니다." },
+  "감귤박물관":       { lon: 126.6080, lat: 33.2920, desc: "감귤의 역사와 재배 문화를 소개하는 박물관 (위치는 대략)." },
+};
+const OREUM = [
+  { name: "새별오름", lon: 126.3567, lat: 33.3646, r: 1.0, h: 1.0, desc: "들불축제가 열리는 서부의 대표 오름." },
+  { name: "산굼부리", lon: 126.6906, lat: 33.4396, r: 1.1, h: 0.7, desc: "분화구가 움푹 파인 기생화산 (천연기념물)." },
+  { name: "용눈이오름", lon: 126.7970, lat: 33.4604, r: 1.0, h: 0.8, desc: "부드러운 능선이 이어지는 동부의 오름." },
+  { name: "다랑쉬오름", lon: 126.8180, lat: 33.4588, r: 1.0, h: 1.0, desc: "‘오름의 여왕’으로 불리는 깊은 분화구의 오름." },
+  { name: "송악산", lon: 126.2900, lat: 33.2050, r: 1.0, h: 0.9, desc: "해안 절벽과 이중 분화구가 있는 남서쪽 오름." },
+  { name: "성산일출봉", lon: 126.9425, lat: 33.4580, r: 1.3, h: 1.5, desc: "바다에서 솟은 응회구. 일출 명소 (세계자연유산)." },
+];
+const WIND = [
+  { name: "김녕·행원 풍력단지", pts: [[126.7420,33.5600],[126.7560,33.5590],[126.7900,33.5570],[126.8050,33.5560]] },
+  { name: "한경(고산) 풍력단지", pts: [[126.1700,33.2980],[126.1780,33.3050],[126.1850,33.3120]] },
+  { name: "가시리 풍력단지", pts: [[126.7700,33.3620],[126.7780,33.3580]] },
+];
+const LIGHT = [
+  { name: "마라도 등대", lon: 126.2695, lat: 33.1160, desc: "국토 최남단 마라도의 등대." },
+  { name: "차귀도 등대", lon: 126.1650, lat: 33.3100, desc: "서쪽 끝 차귀도 앞바다를 비추는 등대 (대략)." },
+  { name: "우도 등대", lon: 126.9585, lat: 33.5030, desc: "우도 정상부의 등대 (대략)." },
+];
+const DOL = [
+  { name: "제주공항 돌하르방", lon: 126.4930, lat: 33.5113 },
+  { name: "관덕정 돌하르방", lon: 126.5190, lat: 33.5133 },
+  { name: "서귀포 돌하르방", lon: 126.5600, lat: 33.2500 },
+];
+const PORT = [
+  { name: "제주항", lon: 126.5405, lat: 33.5185 }, { name: "서귀포항", lon: 126.5620, lat: 33.2405 },
+  { name: "성산포항", lon: 126.9350, lat: 33.4745 }, { name: "한림항", lon: 126.2625, lat: 33.4170 },
+  { name: "애월항", lon: 126.3240, lat: 33.4690 }, { name: "모슬포항", lon: 126.2515, lat: 33.2140 },
+];
+const OLLE = [
+  { name: "올레 1코스 (시흥~광치기)", pts: [[126.9140,33.4705],[126.9230,33.4670],[126.9300,33.4625],[126.9335,33.4600]] },
+  { name: "올레 7코스 (외돌개~월평)", pts: [[126.5445,33.2400],[126.5330,33.2370],[126.5180,33.2345],[126.5050,33.2340],[126.4850,33.2395],[126.4700,33.2430]] },
+  { name: "올레 10코스 (화순~모슬포)", pts: [[126.3380,33.2365],[126.3250,33.2330],[126.3120,33.2300],[126.2950,33.2290],[126.2780,33.2220],[126.2520,33.2155]] },
+];
+const CITRUS = [
+  { name: "효돈 감귤 재배지", lon: 126.6200, lat: 33.2800 }, { name: "남원 감귤 재배지", lon: 126.7000, lat: 33.2850 },
+  { name: "서귀포 감귤 재배지", lon: 126.5000, lat: 33.2750 }, { name: "애월 감귤 재배지", lon: 126.3500, lat: 33.4200 },
+];
+
+// ================================================================ 렌더러 / 씬
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputEncoding = THREE.sRGBEncoding;
+document.body.insertBefore(renderer.domElement, document.body.firstChild);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xbfe3f5);
+scene.fog = new THREE.Fog(0xbfe3f5, 120, 420);
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 1500);
+camera.position.set(0, 62, 82);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.dampingFactor = 0.08;
+controls.maxPolarAngle = Math.PI * 0.48; controls.minDistance = 4; controls.maxDistance = 190;
+controls.target.set(0, 0, 0);
+scene.add(new THREE.HemisphereLight(0xdff2ff, 0x6b7a4a, 0.85));
+const sun = new THREE.DirectionalLight(0xfff1d6, 0.9); sun.position.set(-60, 90, 40); scene.add(sun);
+
+// ================================================================ 지형 (제주 DEM)
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const mix = (a, b, t) => a + (b - a) * t;
+const D = JEJU_DEM, GW = D.w, GH = D.h;
+const WIDTH = 100, SCALE = WIDTH / D.kmX, DEPTH = D.kmY * SCALE;
+const EX = 2.4;
+const heights = (() => { const bin = atob(D.b64), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i); return new Uint16Array(u8.buffer); })();
+function blur(src, r, w, h) {
+  const tmp = new Float32Array(w * h), out = new Float32Array(w * h), n = 2 * r + 1;
+  for (let y = 0; y < h; y++) { let s = 0; for (let x = -r; x <= r; x++) s += src[y * w + clamp(x, 0, w - 1)]; for (let x = 0; x < w; x++) { tmp[y * w + x] = s / n; s += src[y * w + clamp(x + r + 1, 0, w - 1)] - src[y * w + clamp(x - r, 0, w - 1)]; } }
+  for (let x = 0; x < w; x++) { let s = 0; for (let y = -r; y <= r; y++) s += tmp[clamp(y, 0, h - 1) * w + x]; for (let y = 0; y < h; y++) { out[y * w + x] = s / n; s += tmp[clamp(y + r + 1, 0, h - 1) * w + x] - tmp[clamp(y - r, 0, h - 1) * w + x]; } }
+  return out;
+}
+let mask = new Float32Array(GW * GH); for (let i = 0; i < mask.length; i++) mask[i] = heights[i] > 0 ? 1 : 0;
+for (let k = 0; k < 3; k++) mask = blur(mask, 6, GW, GH);
+const hash = (x, y) => { let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263); h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967295; };
+
+const geo = new THREE.PlaneGeometry(WIDTH, DEPTH, GW - 1, GH - 1);
+geo.rotateX(-Math.PI / 2);
+const pos = geo.attributes.position, colArr = new Float32Array(pos.count * 3), landY = new Float32Array(GW * GH);
+function buildTerrain() {
+  for (let i = 0; i < pos.count; i++) {
+    const hm = heights[i], ix = i % GW, iy = (i / GW) | 0;
+    let y;
+    if (hm > 0) y = hm / 1000 * SCALE * EX;
+    else { const s = clamp(mask[i] * 2, 0, 1); y = -(0.12 + 2.4 * Math.pow(1 - s, 1.5)); }
+    pos.setY(i, y); landY[i] = Math.max(0, y);
+    if (colArr[i * 3 + 3 - 1] === 0) {
+      const n = hash(ix, iy) * 0.08;
+      let c;
+      if (hm <= 0) c = [0.25, 0.5, 0.58];
+      else if (hm < 8) c = [0.82, 0.76, 0.56];
+      else if (hm < 700) { const t = hm / 700; c = [0.26 + 0.1 * t + n, 0.5 - 0.12 * t + n, 0.2 + 0.03 * t]; }
+      else if (hm < 1500) { const t = (hm - 700) / 800; c = [0.3 + 0.14 * t, 0.34 + 0.02 * t, 0.2 + 0.1 * t].map(v => v + n); }
+      else { const t = clamp((hm - 1500) / 450, 0, 1); c = [0.42 + 0.14 * t, 0.38 + 0.14 * t, 0.34 + 0.14 * t].map(v => v + n); }
+      colArr.set(c, i * 3);
+    }
+  }
+  pos.needsUpdate = true; geo.computeVertexNormals();
+}
+buildTerrain();
+geo.setAttribute("color", new THREE.BufferAttribute(colArr, 3));
+scene.add(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: false })));
+const water = new THREE.Mesh(new THREE.PlaneGeometry(2400, 2400).rotateX(-Math.PI / 2),
+  new THREE.MeshStandardMaterial({ color: 0x1b78b4, roughness: 0.25, metalness: 0.1, transparent: true, opacity: 0.8 }));
+water.position.y = 0.02; scene.add(water);
+
+function hAt(x, z) {
+  const u = clamp((x / WIDTH + 0.5) * (GW - 1), 0, GW - 1.001), v = clamp((z / DEPTH + 0.5) * (GH - 1), 0, GH - 1.001);
+  const ix = Math.floor(u), iy = Math.floor(v), fx = u - ix, fy = v - iy, i = iy * GW + ix;
+  return mix(mix(landY[i], landY[i + 1], fx), mix(landY[i + GW], landY[i + GW + 1], fx), fy);
+}
+const lonlat = (lon, lat) => new THREE.Vector3(((lon - 126.10) / 0.9 - 0.5) * WIDTH, 0, ((33.60 - lat) / 0.52 - 0.5) * DEPTH);
+function groundPos(lon, lat) { const p = lonlat(lon, lat); p.y = hAt(p.x, p.z); return p; }
+
+// ================================================================ 레이어 / 마커 인프라
+const LAYERS = {
+  spot:   { name: "관광지 방문객", color: "#ff8a1f", on: true },
+  olle:   { name: "올레길", color: "#e8d300", on: true },
+  port:   { name: "항·포구", color: "#1a78b0", on: true },
+  citrus: { name: "감귤 재배지", color: "#f08a00", on: true },
+  oreum:  { name: "오름·한라산", color: "#4c8a3a", on: true },
+  wind:   { name: "풍력발전기", color: "#e5eef2", on: true },
+  light:  { name: "등대", color: "#d9423a", on: true },
+  dol:    { name: "돌하르방", color: "#6a6a6a", on: true },
+};
+const groups = {}, labelsEl = $("labels"), labelItems = [], clickable = [], anim = [];
+for (const k in LAYERS) { groups[k] = new THREE.Group(); scene.add(groups[k]); }
+const matBasalt = new THREE.MeshStandardMaterial({ color: 0x6b6b6b, roughness: 1 });
+
+function addLabel(layer, text, point, cls, yOff) {
+  const el = document.createElement("div"); el.className = "lb " + (cls || ""); el.textContent = text; labelsEl.appendChild(el);
+  const item = { layer, el, point: point.clone().add(new THREE.Vector3(0, yOff || 0.8, 0)), text };
+  labelItems.push(item); return item;
+}
+function register(obj, info) { obj.userData.info = info; obj.traverse(o => { o.userData.info = info; }); clickable.push(obj); }
+
+// --- 관광지 막대 (방문객 수)
+const bars = {};
+for (const name in SPOTS) {
+  const s = SPOTS[name], p = groundPos(s.lon, s.lat), g = new THREE.Group(); g.position.copy(p);
+  const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 1, 20).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ color: 0xff8a1f, emissive: 0x401800, roughness: 0.5 }));
+  const cap = new THREE.Mesh(new THREE.SphereGeometry(0.55, 20, 14), new THREE.MeshStandardMaterial({ color: 0xffd08a, emissive: 0x663300 }));
+  g.add(cyl, cap); groups.spot.add(g);
+  const info = { kind: "spot", name, type: "관광지", desc: s.desc };
+  register(g, info);
+  const lb = addLabel("spot", name, p, "spot", 0);
+  bars[name] = { g, cyl, cap, cur: 0.01, tgt: 0.01, base: p, lb, info };
+}
+
+// --- 오름
+for (const o of OREUM) {
+  const p = groundPos(o.lon, o.lat), m = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x5e9a46, roughness: 1 }));
+  m.scale.set(o.r, o.h, o.r); m.position.copy(p); m.position.y -= 0.05; groups.oreum.add(m);
+  register(m, { name: o.name, type: "오름", desc: o.desc });
+  addLabel("oreum", o.name, p, "", o.h + 0.2);
+}
+{ // 한라산 백록담 깃발
+  const p = groundPos(126.5312, 33.3617), pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 2, 8).translate(0, 1, 0), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+  const flag = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.55).translate(0.45, 1.65, 0), new THREE.MeshStandardMaterial({ color: 0xff8a1f, side: THREE.DoubleSide }));
+  const g = new THREE.Group(); g.add(pole, flag); g.position.copy(p); groups.oreum.add(g);
+  register(g, { name: "한라산 백록담 (1,947m)", type: "산", desc: "제주의 중심에 솟은 화산. 정상에는 분화호 백록담이 있습니다. (지도 데이터상 최고점 약 1,905m)" });
+  addLabel("oreum", "한라산 백록담", p, "", 2.4);
+}
+
+// --- 풍력발전기
+const rotors = [];
+for (const w of WIND) {
+  let first = null;
+  for (const [lon, lat] of w.pts) {
+    const p = groundPos(lon, lat), g = new THREE.Group();
+    const tower = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.06, 1.7, 8).translate(0, 0.85, 0), new THREE.MeshStandardMaterial({ color: 0xf4f7f8 }));
+    const rot = new THREE.Group(); rot.position.set(0, 1.7, 0.08);
+    for (let i = 0; i < 3; i++) { const b = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.95, 0.015).translate(0, 0.48, 0), new THREE.MeshStandardMaterial({ color: 0xffffff })); b.rotation.z = i * Math.PI * 2 / 3; rot.add(b); }
+    g.add(tower, rot); g.position.copy(p); g.rotation.y = 0.5; groups.wind.add(g); rotors.push(rot);
+    register(g, { name: w.name, type: "풍력발전기", desc: "제주의 바람을 전기로 바꾸는 풍력발전 단지 (위치는 대략)." });
+    first = first || p;
+  }
+  addLabel("wind", w.name, first, "", 2.4);
+}
+
+// --- 등대
+const beams = [];
+for (const l of LIGHT) {
+  const p = groundPos(l.lon, l.lat), g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.22, 1.4, 12).translate(0, 0.7, 0), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.19, 0.3, 12).translate(0, 0.6, 0), new THREE.MeshStandardMaterial({ color: 0xd9423a }));
+  const top = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10).translate(0, 1.5, 0), new THREE.MeshBasicMaterial({ color: 0xfff2a8 }));
+  const beam = new THREE.Mesh(new THREE.ConeGeometry(0.35, 4, 16, 1, true).rotateZ(Math.PI / 2).translate(2.1, 0, 0), new THREE.MeshBasicMaterial({ color: 0xfff2a8, transparent: true, opacity: 0.3, side: THREE.DoubleSide, depthWrite: false }));
+  const bg = new THREE.Group(); bg.position.y = 1.5; bg.add(beam); beams.push(bg);
+  g.add(body, band, top, bg); g.position.copy(p); groups.light.add(g);
+  register(g, { name: l.name, type: "등대", desc: l.desc });
+  addLabel("light", l.name, p, "", 2.0);
+}
+
+// --- 돌하르방
+for (const d of DOL) {
+  const p = groundPos(d.lon, d.lat), g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.26, 0.6, 12).translate(0, 0.3, 0), matBasalt);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 14, 12).translate(0, 0.82, 0), matBasalt);
+  const hat = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.28, 0.14, 14).translate(0, 1.06, 0), matBasalt);
+  const nose = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.1, 0.08).translate(0, 0.82, 0.21), matBasalt);
+  g.add(body, head, hat, nose); g.scale.setScalar(1.5); g.position.copy(p); groups.dol.add(g);
+  register(g, { name: d.name, type: "돌하르방", desc: "제주를 상징하는 현무암 수호 석상 (위치는 대략)." });
+  addLabel("dol", d.name, p, "", 1.9);
+}
+
+// --- 항·포구
+for (const pt of PORT) {
+  const p = groundPos(pt.lon, pt.lat), g = new THREE.Group();
+  const dock = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.12, 0.3).translate(0, 0.06, 0), new THREE.MeshStandardMaterial({ color: 0xb9b3a4 }));
+  const hull = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.15, 0.2).translate(0.3, 0.1, 0.45), new THREE.MeshStandardMaterial({ color: 0x1a78b0 }));
+  const sail = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.5, 4).translate(0.3, 0.45, 0.45), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+  g.add(dock, hull, sail); g.position.copy(p); groups.port.add(g);
+  register(g, { name: pt.name, type: "항·포구", desc: "제주의 주요 항·포구 (위치는 대략)." });
+  addLabel("port", pt.name, p, "", 1.0);
+}
+
+// --- 올레길
+for (const r of OLLE) {
+  const pts = r.pts.map(([lon, lat]) => { const p = groundPos(lon, lat); p.y += 0.18; return p; });
+  const curve = new THREE.CatmullRomCurve3(pts), tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 80, 0.09, 6, false), new THREE.MeshBasicMaterial({ color: 0xe8d300 }));
+  groups.olle.add(tube); register(tube, { name: r.name, type: "올레길", desc: "제주 올레길의 대략적인 경로입니다. 실제 코스와 다를 수 있습니다." });
+  addLabel("olle", r.name, pts[Math.floor(pts.length / 2)], "", 0.6);
+}
+
+// --- 감귤 재배지 (인스턴스)
+{
+  const N = 170, total = CITRUS.length * N;
+  const crown = new THREE.InstancedMesh(new THREE.SphereGeometry(0.14, 8, 6), new THREE.MeshStandardMaterial({ color: 0x2f7a2a }), total);
+  const fruit = new THREE.InstancedMesh(new THREE.SphereGeometry(0.06, 6, 5), new THREE.MeshStandardMaterial({ color: 0xff9a1a, emissive: 0x4a2400 }), total * 2);
+  const m = new THREE.Matrix4(); let ci = 0, fi = 0;
+  CITRUS.forEach((z, zi) => {
+    const c = lonlat(z.lon, z.lat);
+    for (let i = 0; i < N; i++) {
+      const a = hash(zi * 1000 + i, 11) * Math.PI * 2, r = Math.sqrt(hash(zi * 1000 + i, 29)) * 3.2;
+      const x = c.x + Math.cos(a) * r, zz = c.z + Math.sin(a) * r * 0.75, y = hAt(x, zz);
+      if (y < 0.15) { m.makeScale(0, 0, 0); crown.setMatrixAt(ci++, m); fruit.setMatrixAt(fi++, m); fruit.setMatrixAt(fi++, m); continue; }
+      m.makeTranslation(x, y + 0.14, zz); crown.setMatrixAt(ci++, m);
+      m.makeTranslation(x + 0.08, y + 0.26, zz + 0.04); fruit.setMatrixAt(fi++, m);
+      m.makeTranslation(x - 0.07, y + 0.2, zz - 0.07); fruit.setMatrixAt(fi++, m);
+    }
+    const hit = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 3.2, 1.2, 24).translate(0, 0.6, 0), new THREE.MeshBasicMaterial({ visible: false }));
+    hit.position.set(c.x, hAt(c.x, c.z), c.z); groups.citrus.add(hit);
+    register(hit, { name: z.name, type: "감귤 재배지", desc: "감귤 과수원이 모여 있는 지역 (범위는 대략). 겨울철에 수확합니다." });
+    addLabel("citrus", z.name, hit.position, "", 1.4);
+  });
+  groups.citrus.add(crown, fruit);
+}
+
+// ================================================================ UI
+const layersEl = $("layers");
+for (const k in LAYERS) {
+  const l = document.createElement("label"); l.className = "ly";
+  l.innerHTML = `<input type="checkbox" checked data-k="${k}"><span class="sw" style="background:${LAYERS[k].color}"></span>${LAYERS[k].name}`;
+  layersEl.appendChild(l);
+}
+layersEl.addEventListener("change", e => { const k = e.target.dataset.k; LAYERS[k].on = e.target.checked; groups[k].visible = e.target.checked; });
+$("auto").onchange = e => { controls.autoRotate = e.target.checked; controls.autoRotateSpeed = 0.6; };
+
+let month = 0;
+const key = r => `${r["기준연도"]}.${String(r["기준월"]).padStart(2, "0")}`;
+const fmt = n => n.toLocaleString("ko-KR");
+function setRows(rows) {
+  ROWS = rows.slice().sort((a, b) => key(a) < key(b) ? -1 : 1);
+  $("month").max = ROWS.length - 1; $("month").value = ROWS.length - 1; month = ROWS.length - 1; applyMonth();
+}
+function applyMonth() {
+  const row = ROWS[month]; if (!row) return;
+  $("mlabel").textContent = `${row["기준연도"]}년 ${row["기준월"]}월`;
+  const max = Math.max(...ROWS.flatMap(r => Object.keys(SPOTS).map(n => +r[n] || 0)));
+  const list = Object.keys(SPOTS).map(n => [n, +row[n] || 0]).sort((a, b) => b[1] - a[1]);
+  const top = list[0][1] || 1;
+  $("rank").innerHTML = list.map(([n, v]) => `<button class="rk" data-n="${n}"><div style="display:flex;justify-content:space-between"><span>${n.replace("_", " ")}</span><b>${fmt(v)}명</b></div><div class="bar" style="width:${Math.max(3, v / top * 100)}%"></div></button>`).join("");
+  for (const [n, v] of list) { const b = bars[n]; b.tgt = Math.max(0.05, v / max * 7); b.lb.el.textContent = `${n.replace("_", " ")} ${fmt(v)}`; }
+}
+$("month").oninput = e => { month = +e.target.value; applyMonth(); if (sel && sel.kind === "spot") showInfo(sel); };
+$("rank").onclick = e => { const b = e.target.closest(".rk"); if (!b) return; const bar = bars[b.dataset.n]; select(bar.info, bar.base); };
+
+let sel = null, flyT = null;
+function showInfo(info) {
+  sel = info; let html = `<span class="tp">${info.type}</span><h4>${info.name.replace("_", " ")}</h4><p>${info.desc}</p>`;
+  if (info.kind === "spot") {
+    const v = +ROWS[month][info.name] || 0;
+    html += `<p><b>${ROWS[month]["기준연도"]}년 ${ROWS[month]["기준월"]}월 방문객: ${fmt(v)}명</b></p><div id="mini">` +
+      ROWS.map((r, i) => { const x = +r[info.name] || 0, m = Math.max(...ROWS.map(q => +q[info.name] || 0)); return `<i class="${i === month ? "on" : ""}" style="height:${Math.max(4, x / m * 100)}%" title="${r["기준월"]}월 ${fmt(x)}명"></i>`; }).join("") + `</div>`;
+  }
+  $("ib").innerHTML = html; $("info").style.display = "block";
+}
+function select(info, point) {
+  showInfo(info);
+  if (point) { flyT = { from: camera.position.clone(), fromT: controls.target.clone(), to: point.clone().add(new THREE.Vector3(0, 8, 12)), toT: point.clone(), t: 0 }; $("auto").checked = false; controls.autoRotate = false; }
+}
+$("ix").onclick = () => { $("info").style.display = "none"; sel = null; };
+
+// 클릭 선택
+const ray = new THREE.Raycaster(), mouse = new THREE.Vector2(); let down = null;
+renderer.domElement.addEventListener("pointerdown", e => { down = [e.clientX, e.clientY]; flyT = null; });
+renderer.domElement.addEventListener("pointerup", e => {
+  if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 5) return;
+  mouse.set(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1); ray.setFromCamera(mouse, camera);
+  const objs = clickable.filter(o => { let p = o; while (p && p !== scene) { if (p.visible === false) return false; p = p.parent; } return true; });
+  const hit = ray.intersectObjects(objs, true)[0];
+  if (hit) { let o = hit.object; while (o && !o.userData.info) o = o.parent; if (o) select(o.userData.info, hit.point); }
+});
+
+addEventListener("resize", () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+
+// ================================================================ 루프
+const v3 = new THREE.Vector3(), clock = new THREE.Clock();
+function frame() {
+  requestAnimationFrame(frame);
+  const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
+  for (const r of rotors) r.rotation.z -= dt * 2.2;
+  for (const b of beams) b.rotation.y += dt * 1.6;
+  for (const n in bars) { const b = bars[n]; b.cur += (b.tgt - b.cur) * Math.min(1, dt * 5); b.cyl.scale.y = b.cur; b.cap.position.y = b.cur; b.lb.point.set(b.base.x, b.base.y + b.cur + 1.3, b.base.z); }
+  if (flyT) {
+    flyT.t = Math.min(1, flyT.t + dt * 0.9); const k = flyT.t * flyT.t * (3 - 2 * flyT.t);
+    camera.position.lerpVectors(flyT.from, flyT.to, k); controls.target.lerpVectors(flyT.fromT, flyT.toT, k); if (flyT.t >= 1) flyT = null;
+  }
+  controls.update();
+  const cp = camera.position;
+  for (const it of labelItems) {
+    const vis = LAYERS[it.layer].on; if (!vis) { it.el.style.display = "none"; continue; }
+    v3.copy(it.point).project(camera);
+    if (v3.z > 1 || Math.abs(v3.x) > 1.1 || Math.abs(v3.y) > 1.1) { it.el.style.display = "none"; continue; }
+    const d = cp.distanceTo(it.point), far = it.layer === "spot" ? 1 : clamp(1.4 - d / 110, 0, 1);
+    if (far < 0.15) { it.el.style.display = "none"; continue; }
+    it.el.style.display = "block"; it.el.style.opacity = far;
+    it.el.style.transform = `translate(-50%,-100%) translate(${(v3.x * 0.5 + 0.5) * innerWidth}px,${(-v3.y * 0.5 + 0.5) * innerHeight}px)`;
+  }
+  renderer.render(scene, camera);
+}
+
+setRows(ROWS);
+if (PO_API) fetch(PO_API).then(r => r.json()).then(j => { if (j && j.data && j.data.length) setRows(j.data); }).catch(() => {});
+frame();
+</script>
+</body>
+</html>

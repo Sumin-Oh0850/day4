@@ -13,6 +13,7 @@ export default function Header({ session, route, go }) {
         <span className="logo-mark">🍊</span> 제주담
       </a>
       <nav className="nav">
+        <a href="./po.html">3D 입체지도</a>
         {session ? (
           <>
             <a className={route === 'me' ? 'active' : ''} href="#/me">{nickname} 님</a>

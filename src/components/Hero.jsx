@@ -22,6 +22,7 @@ export default function Hero({ session }) {
               <a className="btn ghost lg" href="#/login">로그인</a>
             </>
           )}
+          <a className="btn ghost lg" href="./po.html">🗺️ 3D 입체지도</a>
         </div>
       </div>
       {img && (
